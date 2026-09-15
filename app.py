@@ -455,6 +455,17 @@ def _ensure_mcp_server_running():
         st.session_state["mcp_started"] = True
 
 
+def main():
+    _init_session_state()
+    _render_header()
+
+    # Auto-cleanup old sessions (runs once per app boot, fast no-op usually)
+    cleanup_old_sessions(max_age_hours=72)
+
+    model, api_key, api_base = _render_sidebar()
+    _render_chat(model, api_key, api_base)
+
+
 if __name__ == "__main__":
     _ensure_mcp_server_running()
     main()
