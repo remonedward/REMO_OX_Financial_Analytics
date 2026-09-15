@@ -1,0 +1,9 @@
+fastmcp>=2.0
+pandas
+openpyxl
+matplotlib
+fpdf2
+streamlit
+litellm
+python-multipart
+werkzeug

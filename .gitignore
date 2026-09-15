@@ -1,0 +1,8 @@
+sessions/
+__pycache__/
+.venv/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/

@@ -1,0 +1,43 @@
+services:
+  # ── MCP Server ──────────────────────────────────────────────────────
+  # FastMCP server exposing financial analysis tools over SSE.
+  # Internal-only: only the Streamlit service communicates with it.
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    volumes:
+      - sessions_data:/app/sessions
+    environment:
+      - SESSIONS_DIR=/app/sessions
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/sse')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── Streamlit Web UI ────────────────────────────────────────────────
+  # Public-facing web application. Users access this via browser.
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    ports:
+      - "8501:8501"
+    volumes:
+      - sessions_data:/app/sessions
+    environment:
+      - MCP_SERVER_URL=http://mcp-server:8000/sse
+      - SESSIONS_DIR=/app/sessions
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+# ── Shared Volume ───────────────────────────────────────────────────
+# Persistent storage for session data (uploads, charts, PDFs, chat history).
+volumes:
+  sessions_data:
+    driver: local
