@@ -16,9 +16,47 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import pandas as pd
 from fastmcp import FastMCP
 from fpdf import FPDF
+import arabic_reshaper
+from bidi.algorithm import get_display
+
+# ---------------------------------------------------------------------------
+# Arabic text handling helpers
+# ---------------------------------------------------------------------------
+FONTS_DIR = Path(__file__).parent / "fonts"
+AMIRI_REGULAR = FONTS_DIR / "Amiri-Regular.ttf"
+AMIRI_BOLD = FONTS_DIR / "Amiri-Bold.ttf"
+
+if AMIRI_REGULAR.exists():
+    try:
+        fm.fontManager.addfont(str(AMIRI_REGULAR))
+    except Exception:
+        pass
+
+
+def _has_arabic(text: str) -> bool:
+    """Check if a string contains Arabic Unicode characters."""
+    if not text or not isinstance(text, str):
+        return False
+    return any(
+        '\u0600' <= ch <= '\u06FF' or '\u0750' <= ch <= '\u077F' or '\u08A0' <= ch <= '\u08FF'
+        for ch in text
+    )
+
+
+def _bidi_arabic(text: str) -> str:
+    """Reshape and reorder Arabic text for correct RTL display in PDF & charts."""
+    if not text or not isinstance(text, str):
+        return ""
+    if _has_arabic(text):
+        try:
+            return get_display(arabic_reshaper.reshape(text))
+        except Exception:
+            return text
+    return text
 
 # ---------------------------------------------------------------------------
 # Initialize FastMCP server
@@ -261,68 +299,74 @@ def generate_chart(
         # --- Generate chart ---
         fig, ax = plt.subplots(figsize=(10, 6))
 
+        # Check if Arabic font is available
+        font_prop = fm.FontProperties(fname=str(AMIRI_REGULAR)) if AMIRI_REGULAR.exists() else None
+
+        clean_x = _bidi_arabic(x_column)
+        clean_y = _bidi_arabic(y_column) if y_column else ""
+        auto_title = _bidi_arabic(title or (f"{y_column} by {x_column}" if y_column else f"Distribution of {x_column}"))
+
         if chart_type == "bar":
-            auto_title = title or f"{y_column} by {x_column}"
             data = df.dropna(subset=[x_column, y_column])
+            x_vals = [_bidi_arabic(str(v)) for v in data[x_column]]
             ax.bar(
-                data[x_column].astype(str),
+                x_vals,
                 data[y_column],
                 color="#2196F3",
                 edgecolor="white",
             )
-            ax.set_xlabel(x_column, fontsize=11)
-            ax.set_ylabel(y_column, fontsize=11)
-            plt.xticks(rotation=45, ha="right")
+            ax.set_xlabel(clean_x, fontproperties=font_prop, fontsize=11)
+            ax.set_ylabel(clean_y, fontproperties=font_prop, fontsize=11)
+            plt.xticks(rotation=45, ha="right", fontproperties=font_prop)
             ax.grid(axis="y", alpha=0.3)
 
         elif chart_type == "line":
-            auto_title = title or f"{y_column} over {x_column}"
             data = df.dropna(subset=[x_column, y_column])
             ax.plot(
                 data[x_column], data[y_column],
                 marker="o", color="#4CAF50", linewidth=2, markersize=5,
             )
-            ax.set_xlabel(x_column, fontsize=11)
-            ax.set_ylabel(y_column, fontsize=11)
+            ax.set_xlabel(clean_x, fontproperties=font_prop, fontsize=11)
+            ax.set_ylabel(clean_y, fontproperties=font_prop, fontsize=11)
             ax.grid(True, alpha=0.3)
 
         elif chart_type == "pie":
-            auto_title = title or f"{y_column} by {x_column}"
             data = df.dropna(subset=[x_column, y_column])
-            # Aggregate if there are duplicate labels
             pie_data = data.groupby(x_column)[y_column].sum()
+            labels = [_bidi_arabic(str(idx)) for idx in pie_data.index]
             wedges, texts, autotexts = ax.pie(
                 pie_data.values,
-                labels=pie_data.index.astype(str),
+                labels=labels,
                 autopct="%1.1f%%",
                 startangle=90,
                 colors=plt.cm.Set3.colors,
             )
+            if font_prop:
+                for t in texts:
+                    t.set_fontproperties(font_prop)
             ax.axis("equal")
 
         elif chart_type == "scatter":
-            auto_title = title or f"{y_column} vs {x_column}"
             data = df.dropna(subset=[x_column, y_column])
             ax.scatter(
                 data[x_column], data[y_column],
                 color="#FF9800", alpha=0.7, edgecolors="white", s=60,
             )
-            ax.set_xlabel(x_column, fontsize=11)
-            ax.set_ylabel(y_column, fontsize=11)
+            ax.set_xlabel(clean_x, fontproperties=font_prop, fontsize=11)
+            ax.set_ylabel(clean_y, fontproperties=font_prop, fontsize=11)
             ax.grid(True, alpha=0.3)
 
         elif chart_type == "hist":
-            auto_title = title or f"Distribution of {x_column}"
             data = df[x_column].dropna()
             ax.hist(
                 data, bins=min(20, max(5, len(data) // 5)),
                 color="#9C27B0", edgecolor="white", alpha=0.85,
             )
-            ax.set_xlabel(x_column, fontsize=11)
+            ax.set_xlabel(clean_x, fontproperties=font_prop, fontsize=11)
             ax.set_ylabel("Frequency", fontsize=11)
             ax.grid(axis="y", alpha=0.3)
 
-        ax.set_title(auto_title, fontsize=14, fontweight="bold", pad=15)
+        ax.set_title(auto_title, fontproperties=font_prop, fontsize=14, fontweight="bold", pad=15)
         fig.tight_layout()
 
         # Save output
@@ -371,19 +415,30 @@ def export_pdf_report(
 
         pdf = FPDF()
         pdf.set_auto_page_break(auto=True, margin=20)
+
+        # Setup font: Prefer Amiri Arabic TrueType font if available
+        font_family = "Helvetica"
+        if AMIRI_REGULAR.exists() and AMIRI_BOLD.exists():
+            try:
+                pdf.add_font("Amiri", "", str(AMIRI_REGULAR))
+                pdf.add_font("Amiri", "B", str(AMIRI_BOLD))
+                font_family = "Amiri"
+            except Exception:
+                pass
+
         pdf.add_page()
 
         # --- Header banner ---
         pdf.set_fill_color(33, 150, 243)  # Material Blue
         pdf.rect(0, 0, 210, 35, "F")
         pdf.set_text_color(255, 255, 255)
-        pdf.set_font("Helvetica", "B", 20)
+        pdf.set_font(font_family, "B", 20)
         pdf.set_y(8)
         pdf.cell(
             0, 12, "REMO_OX Financial Analytics",
             align="C", new_x="LMARGIN", new_y="NEXT",
         )
-        pdf.set_font("Helvetica", "", 10)
+        pdf.set_font(font_family, "", 10)
         pdf.cell(
             0, 8,
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
@@ -395,8 +450,11 @@ def export_pdf_report(
         pdf.ln(15)
 
         # --- Report title ---
-        pdf.set_font("Helvetica", "B", 16)
-        pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font(font_family, "B", 16)
+        is_title_arabic = _has_arabic(title)
+        title_text = _bidi_arabic(title) if is_title_arabic else title
+        title_align = "R" if is_title_arabic else "L"
+        pdf.cell(0, 10, title_text, align=title_align, new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
         # Divider
@@ -405,12 +463,15 @@ def export_pdf_report(
         pdf.ln(8)
 
         # --- Summary text body ---
-        pdf.set_font("Helvetica", "", 11)
+        pdf.set_font(font_family, "", 12 if font_family == "Amiri" else 11)
         # Handle multi-line text properly
         for paragraph in summary_text.split("\n\n"):
             paragraph = paragraph.strip()
             if paragraph:
-                pdf.multi_cell(0, 7, paragraph)
+                is_p_arabic = _has_arabic(paragraph)
+                p_text = _bidi_arabic(paragraph) if is_p_arabic else paragraph
+                p_align = "R" if is_p_arabic else "L"
+                pdf.multi_cell(0, 8, p_text, align=p_align)
                 pdf.ln(4)
 
         # --- Embed chart if provided ---
@@ -418,14 +479,14 @@ def export_pdf_report(
             chart_file = Path(chart_path)
             if chart_file.exists():
                 pdf.ln(5)
-                pdf.set_font("Helvetica", "B", 13)
-                pdf.cell(0, 10, "Chart", new_x="LMARGIN", new_y="NEXT")
+                pdf.set_font(font_family, "B", 13)
+                pdf.cell(0, 10, "Chart / الرسم البياني", new_x="LMARGIN", new_y="NEXT")
                 pdf.ln(3)
                 # Scale to fit page width (max ~180mm with margins)
                 pdf.image(str(chart_file), x=15, w=180)
             else:
                 pdf.ln(5)
-                pdf.set_font("Helvetica", "I", 10)
+                pdf.set_font(font_family, "I", 10)
                 pdf.set_text_color(180, 0, 0)
                 pdf.cell(
                     0, 8,
@@ -436,11 +497,11 @@ def export_pdf_report(
 
         # --- Footer ---
         pdf.set_y(-25)
-        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_font(font_family, "", 9)
         pdf.set_text_color(128, 128, 128)
         pdf.cell(
             0, 10,
-            "REMO_OX Financial Analytics  |  Confidential",
+            "REMO_OX Financial Analytics  |  Confidential  |  تقرير مالي سري",
             align="C",
         )
 
