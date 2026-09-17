@@ -296,7 +296,7 @@ def _render_sidebar() -> tuple[str, str, str | None]:
         if st.session_state.session_id:
             sdir = get_session_path(st.session_state.session_id)
             if sdir.exists():
-                charts = sorted(sdir.glob("chart_*.png"))
+                charts = sorted(list(sdir.glob("*.png")) + list(sdir.glob("*.jpg")))
                 for cp in charts:
                     with open(cp, "rb") as f:
                         st.download_button(
@@ -305,8 +305,9 @@ def _render_sidebar() -> tuple[str, str, str | None]:
                             file_name=cp.name,
                             mime="image/png",
                             use_container_width=True,
+                            key=f"sb_chart_{cp.name}",
                         )
-                pdfs = sorted(sdir.glob("report_*.pdf"))
+                pdfs = sorted(sdir.glob("*.pdf"))
                 for pp in pdfs:
                     with open(pp, "rb") as f:
                         st.download_button(
@@ -315,6 +316,7 @@ def _render_sidebar() -> tuple[str, str, str | None]:
                             file_name=pp.name,
                             mime="application/pdf",
                             use_container_width=True,
+                            key=f"sb_pdf_{pp.name}",
                         )
                 if not charts and not pdfs:
                     st.caption(
@@ -349,7 +351,7 @@ def _render_chat(model: str, api_key: str, api_base: str | None):
         return
 
     # Display chat history
-    for msg in st.session_state.messages:
+    for idx, msg in enumerate(st.session_state.messages):
         role = msg.get("role", "")
         if role not in ("user", "assistant"):
             continue
@@ -359,6 +361,18 @@ def _render_chat(model: str, api_key: str, api_base: str | None):
             for img_path in msg.get("images", []):
                 if Path(img_path).exists():
                     st.image(img_path, use_container_width=True)
+            # Show inline PDF download buttons if any
+            for p_idx, pdf_path in enumerate(msg.get("pdfs", [])):
+                pp = Path(pdf_path)
+                if pp.exists():
+                    with open(pp, "rb") as f:
+                        st.download_button(
+                            f"📄 Download {pp.name}",
+                            f.read(),
+                            file_name=pp.name,
+                            mime="application/pdf",
+                            key=f"chat_pdf_{idx}_{p_idx}",
+                        )
 
     # Chat input
     prompt = st.chat_input(
@@ -408,18 +422,24 @@ def _render_chat(model: str, api_key: str, api_base: str | None):
 
                 st.markdown(response_text)
 
-                # Show generated charts inline
+                # Show generated charts and pdfs inline
                 new_images: list[str] = []
+                new_pdfs: list[str] = []
                 for fpath in gen_files:
                     p = Path(fpath)
-                    if p.suffix == ".png" and p.exists():
+                    if p.suffix in (".png", ".jpg") and p.exists():
                         st.image(str(p), use_container_width=True)
                         new_images.append(fpath)
                     elif p.suffix == ".pdf" and p.exists():
-                        st.success(
-                            "📄 PDF report generated! "
-                            "Download it from the sidebar."
-                        )
+                        new_pdfs.append(fpath)
+                        with open(p, "rb") as f:
+                            st.download_button(
+                                f"📥 Download PDF: {p.name}",
+                                f.read(),
+                                file_name=p.name,
+                                mime="application/pdf",
+                                key=f"chat_pdf_direct_{p.name}",
+                            )
 
                 # Persist to session state + disk
                 st.session_state.messages.append(
@@ -427,6 +447,7 @@ def _render_chat(model: str, api_key: str, api_base: str | None):
                         "role": "assistant",
                         "content": response_text,
                         "images": new_images,
+                        "pdfs": new_pdfs,
                     }
                 )
                 save_chat(

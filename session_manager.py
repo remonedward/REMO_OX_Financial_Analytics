@@ -94,6 +94,8 @@ def save_chat(session_id: str, messages: list[dict]):
         }
         if msg.get("images"):
             clean_msg["images"] = msg["images"]
+        if msg.get("pdfs"):
+            clean_msg["pdfs"] = msg["pdfs"]
         clean_messages.append(clean_msg)
 
     _write_json(session_dir / "chat_history.json", clean_messages)
