@@ -200,8 +200,9 @@ async def chat_with_tools(
     kwargs: dict = {
         "model": model,
         "messages": full_messages,
-        "temperature": 0.3,
     }
+    if "gemini" not in model.lower():
+        kwargs["temperature"] = 0.2
     if api_key:
         kwargs["api_key"] = api_key
     if api_base:

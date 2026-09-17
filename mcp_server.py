@@ -25,7 +25,7 @@ from fpdf import FPDF
 # ---------------------------------------------------------------------------
 mcp = FastMCP(
     name="REMO_OX Financial Analytics",
-    description=(
+    instructions=(
         "Financial data analysis tools: analyze Excel data, "
         "generate charts, and export PDF reports."
     ),

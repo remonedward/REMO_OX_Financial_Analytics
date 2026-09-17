@@ -131,12 +131,12 @@ def _render_sidebar() -> tuple[str, str, str | None]:
         st.subheader("🤖 LLM Provider")
 
         provider_presets = {
+            "Google Gemini": {"placeholder": "gemini-2.5-flash"},
             "OpenAI": {"placeholder": "gpt-4o-mini"},
             "Anthropic": {"placeholder": "claude-3-5-sonnet-20241022"},
-            "Google Gemini": {"placeholder": "gemini/gemini-pro"},
-            "Groq": {"placeholder": "groq/llama-3.1-70b-versatile"},
-            "Ollama (Local)": {"placeholder": "ollama/llama3"},
+            "Groq": {"placeholder": "groq/llama-3.3-70b-versatile"},
             "OpenRouter": {"placeholder": "openrouter/auto"},
+            "Ollama (Local)": {"placeholder": "ollama/llama3"},
             "Azure OpenAI": {"placeholder": "azure/gpt-4o"},
             "Custom (OpenAI-compatible)": {"placeholder": "model-name"},
         }
@@ -144,11 +144,16 @@ def _render_sidebar() -> tuple[str, str, str | None]:
         provider = st.selectbox("Provider", list(provider_presets.keys()))
         preset = provider_presets[provider]
 
-        model = st.text_input(
+        model_input = st.text_input(
             "Model Name",
             value=preset["placeholder"],
             help="Model identifier for your chosen provider.",
         )
+
+        # Normalize model string for litellm if needed
+        model = model_input.strip()
+        if provider == "Google Gemini" and not model.startswith("gemini/"):
+            model = f"gemini/{model}"
 
         api_key = st.text_input(
             "API Key",
@@ -439,20 +444,36 @@ def _render_chat(model: str, api_key: str, api_base: str | None):
 # ---------------------------------------------------------------------------
 def _ensure_mcp_server_running():
     """Ensure MCP server runs in the background when hosted on Streamlit Cloud."""
-    if "mcp_started" not in st.session_state:
-        import socket
-        import subprocess
-        import sys
-        
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        result = sock.connect_ex(("127.0.0.1", 8000))
-        sock.close()
-        
-        if result != 0:
-            logger.info("Starting background MCP server...")
-            server_script = Path(__file__).parent / "mcp_server.py"
-            subprocess.Popen([sys.executable, str(server_script)])
-        st.session_state["mcp_started"] = True
+    import socket
+    import subprocess
+    import sys
+    import time
+
+    def _is_port_open(port=8000):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                return s.connect_ex(("127.0.0.1", port)) == 0
+        except Exception:
+            return False
+
+    if not _is_port_open(8000):
+        logger.info("Starting background MCP server...")
+        server_script = Path(__file__).parent / "mcp_server.py"
+        log_file = Path(__file__).parent / "mcp_server_output.log"
+        with open(log_file, "a", encoding="utf-8") as out:
+            subprocess.Popen(
+                [sys.executable, str(server_script)],
+                stdout=out,
+                stderr=out,
+                env=dict(os.environ),
+            )
+        # Wait up to 5 seconds for the server to bind
+        for _ in range(10):
+            time.sleep(0.5)
+            if _is_port_open(8000):
+                logger.info("MCP server is now listening on 8000.")
+                break
 
 
 def main():
