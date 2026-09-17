@@ -131,7 +131,7 @@ def _render_sidebar() -> tuple[str, str, str | None]:
         st.subheader("🤖 LLM Provider")
 
         provider_presets = {
-            "Google Gemini": {"placeholder": "gemini-2.5-flash"},
+            "Google Gemini": {"placeholder": "gemini-1.5-flash"},
             "OpenAI": {"placeholder": "gpt-4o-mini"},
             "Anthropic": {"placeholder": "claude-3-5-sonnet-20241022"},
             "Groq": {"placeholder": "groq/llama-3.3-70b-versatile"},
@@ -147,13 +147,16 @@ def _render_sidebar() -> tuple[str, str, str | None]:
         model_input = st.text_input(
             "Model Name",
             value=preset["placeholder"],
-            help="Model identifier for your chosen provider.",
+            help="Model identifier (e.g. gemini-1.5-flash, gemini-2.0-flash, gpt-4o-mini).",
         )
 
         # Normalize model string for litellm if needed
         model = model_input.strip()
-        if provider == "Google Gemini" and not model.startswith("gemini/"):
-            model = f"gemini/{model}"
+        if provider == "Google Gemini":
+            if model.startswith("models/"):
+                model = model.replace("models/", "")
+            if not model.startswith("gemini/"):
+                model = f"gemini/{model}"
 
         api_key = st.text_input(
             "API Key",
@@ -399,6 +402,7 @@ def _render_chat(model: str, api_key: str, api_base: str | None):
                         api_base=api_base or None,
                         session_dir=session_dir,
                         server_url=MCP_SERVER_URL,
+                        file_info=st.session_state.file_info,
                     )
                 )
 

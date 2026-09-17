@@ -53,19 +53,159 @@ query_type="columns" or "summary") before performing deeper analysis.
 """
 
 
+import mcp_server
+
+# Default MCP tool definitions in OpenAI format for resilient execution
+DEFAULT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_data",
+            "description": "Analyze financial data from an Excel file. Returns statistical summaries, columns, head rows, specific value counts, correlations, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute path to the .xlsx file.",
+                    },
+                    "query_type": {
+                        "type": "string",
+                        "enum": [
+                            "summary", "columns", "head", "tail", "describe",
+                            "shape", "dtypes", "value_counts", "unique", "missing", "corr",
+                        ],
+                        "description": "Type of analysis to perform.",
+                    },
+                    "column": {
+                        "type": "string",
+                        "description": "Target column name for value_counts, unique, or describe.",
+                    },
+                    "n_rows": {
+                        "type": "integer",
+                        "description": "Number of rows to return for head/tail (default 5).",
+                    },
+                },
+                "required": ["file_path", "query_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_chart",
+            "description": "Generate a chart from Excel data and save it as a PNG image.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Absolute path to the .xlsx file.",
+                    },
+                    "x_column": {
+                        "type": "string",
+                        "description": "Column name for X-axis (or labels for pie chart).",
+                    },
+                    "y_column": {
+                        "type": "string",
+                        "description": "Column name for Y-axis (or values for pie chart).",
+                    },
+                    "chart_type": {
+                        "type": "string",
+                        "enum": ["bar", "line", "pie", "scatter", "hist"],
+                        "description": "Chart type.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional title for the chart.",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Path where the PNG file will be saved.",
+                    },
+                },
+                "required": ["file_path", "x_column", "output_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "export_pdf_report",
+            "description": "Generate a professional PDF report with text summary and optional chart.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary_text": {
+                        "type": "string",
+                        "description": "The main text content / analysis summary for the report body.",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Path where the PDF file will be saved.",
+                    },
+                    "chart_path": {
+                        "type": "string",
+                        "description": "Optional path to a chart image (PNG) to embed.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Report title (default: REMO_OX Financial Report).",
+                    },
+                },
+                "required": ["summary_text", "output_path"],
+            },
+        },
+    },
+]
+
+
+def _execute_tool_directly(tool_name: str, arguments: dict) -> str:
+    """Fallback to direct execution from mcp_server module."""
+    try:
+        if tool_name == "analyze_data":
+            return mcp_server.analyze_data(
+                file_path=arguments.get("file_path", ""),
+                query_type=arguments.get("query_type", "summary"),
+                column=arguments.get("column", ""),
+                n_rows=int(arguments.get("n_rows", 5)),
+            )
+        elif tool_name == "generate_chart":
+            return mcp_server.generate_chart(
+                file_path=arguments.get("file_path", ""),
+                x_column=arguments.get("x_column", ""),
+                y_column=arguments.get("y_column", ""),
+                chart_type=arguments.get("chart_type", "bar"),
+                title=arguments.get("title", ""),
+                output_path=arguments.get("output_path", ""),
+            )
+        elif tool_name == "export_pdf_report":
+            return mcp_server.export_pdf_report(
+                summary_text=arguments.get("summary_text", ""),
+                output_path=arguments.get("output_path", ""),
+                chart_path=arguments.get("chart_path", ""),
+                title=arguments.get("title", "REMO_OX Financial Report"),
+            )
+        else:
+            return json.dumps({"error": f"Unknown tool: {tool_name}"})
+    except Exception as e:
+        logger.exception("Direct tool execution failed")
+        return json.dumps({"error": str(e)})
+
+
 async def get_mcp_tools(server_url: str = MCP_SERVER_URL) -> list[dict]:
     """
     Connect to the MCP server and retrieve available tool definitions.
-    Returns tools in OpenAI-compatible function-calling format.
+    Falls back to built-in schemas if SSE retrieval encounters any issue.
     """
-    tools: list[dict] = []
     try:
         async with sse_client(server_url) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.list_tools()
+                tools = []
                 for tool in result.tools:
-                    openai_tool = {
+                    tools.append({
                         "type": "function",
                         "function": {
                             "name": tool.name,
@@ -76,11 +216,12 @@ async def get_mcp_tools(server_url: str = MCP_SERVER_URL) -> list[dict]:
                                 else {"type": "object", "properties": {}}
                             ),
                         },
-                    }
-                    tools.append(openai_tool)
+                    })
+                if tools:
+                    return tools
     except Exception as e:
-        logger.error(f"Failed to fetch MCP tools: {e}")
-    return tools
+        logger.info(f"Using default tool definitions (SSE retrieval info: {e})")
+    return DEFAULT_TOOLS
 
 
 async def call_mcp_tool(
@@ -89,14 +230,14 @@ async def call_mcp_tool(
     server_url: str = MCP_SERVER_URL,
 ) -> str:
     """
-    Call a specific tool on the MCP server and return its response as a string.
+    Call a specific tool on the MCP server.
+    First tries SSE; falls back to direct execution if SSE fails or raises error.
     """
     try:
         async with sse_client(server_url) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(tool_name, arguments)
-
                 if result.content:
                     parts = []
                     for item in result.content:
@@ -105,11 +246,10 @@ async def call_mcp_tool(
                         else:
                             parts.append(str(item))
                     return "\n".join(parts)
-
-                return json.dumps({"result": "Tool executed (no content returned)."})
+                return json.dumps({"result": "Tool executed."})
     except Exception as e:
-        logger.error(f"MCP tool call failed: {e}")
-        return json.dumps({"error": f"Tool call failed: {str(e)}"})
+        logger.info(f"SSE call bypassed, executing directly: {tool_name} ({e})")
+        return _execute_tool_directly(tool_name, arguments)
 
 
 def _inject_session_paths(
@@ -163,33 +303,32 @@ async def chat_with_tools(
     api_base: str | None = None,
     session_dir: str = "",
     server_url: str = MCP_SERVER_URL,
+    file_info: dict | None = None,
 ) -> tuple[str, list[dict], list[str]]:
     """
     Send a chat message to the LLM with MCP tool definitions and handle
     the complete tool-calling loop automatically.
-
-    Args:
-        messages: Chat history in OpenAI format [{role, content}, ...].
-        model: LiteLLM model string (e.g. "gpt-4o", "claude-3-sonnet",
-               "gemini/gemini-pro", "ollama/llama3").
-        api_key: API key for the provider (None for local models).
-        api_base: Custom API base URL (for Ollama, Azure, etc.).
-        session_dir: Session directory path for file path injection.
-        server_url: MCP server SSE endpoint URL.
-
-    Returns:
-        Tuple of:
-          - final_response_text (str)
-          - updated_messages list (for chat history persistence)
-          - list of generated file paths (charts, PDFs)
     """
-    # Fetch available tools from MCP server
+    # Fetch available tools from MCP server (or fallback)
     tools = await get_mcp_tools(server_url)
-    if not tools:
-        logger.warning("No MCP tools available — proceeding without tools.")
 
-    # Build the full message list with system prompt
-    full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + [
+    # Build system prompt, enriched with current file info if present
+    sys_prompt = SYSTEM_PROMPT
+    if file_info and file_info.get("columns"):
+        fname = file_info.get("original_name", "data.xlsx")
+        rows = file_info.get("row_count", "unknown")
+        cols_desc = ", ".join(
+            [f"'{c['name']}' ({c.get('dtype', '')})" for c in file_info["columns"]]
+        )
+        sys_prompt += (
+            f"\n\n**Current Dataset Info:**\n"
+            f"File: '{fname}' ({rows} rows).\n"
+            f"Columns: {cols_desc}.\n"
+            f"Always call analyze_data or generate_chart directly with these columns "
+            f"to answer the user's question with precise data."
+        )
+
+    full_messages = [{"role": "system", "content": sys_prompt}] + [
         {"role": m["role"], "content": m["content"]}
         for m in messages
     ]
